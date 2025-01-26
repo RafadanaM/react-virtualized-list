@@ -10,6 +10,7 @@ function App() {
           </h1>
 
           <VirtualizedList />
+          {/* <RecyclerListExample /> */}
         </div>
       </main>
     </>

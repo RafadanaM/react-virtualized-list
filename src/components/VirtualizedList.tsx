@@ -2,7 +2,7 @@ import { useRef } from "react";
 import useVirtualizedList from "../hooks/useVirtualizedList";
 import ListItem from "./ListItem";
 
-const ITEM_COUNT = 20;
+const ITEM_COUNT = 1000;
 const MAX_HEIGHT = 144 * 4;
 
 function VirtualizedList() {

@@ -2,17 +2,24 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface IParam {
   itemCount: number;
-  getScrollElement: () => HTMLElement | null;
   itemSize: number;
   overscan?: number;
   gap?: number;
+  getScrollElement: () => HTMLElement | null;
 }
 
-function estimateIndex(arr: number[], scrollTop: number, initialLeft = 0) {
+/**
+ * Find the index of item based on current scroll position
+ */
+function estimateIndex(
+  arr: number[],
+  scrollTop: number,
+  initialLeft = 0
+): number {
   let l = initialLeft;
   let r = arr.length - 1;
 
-  let idx = 0;
+  let idx = l;
   while (l < r) {
     const m = Math.floor((l + r) / 2);
 
@@ -44,8 +51,8 @@ function useVirtualizedList({
   const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
 
   const getScrollElementRef = useRef(getScrollElement);
-  const rafId = useRef<number | null>(null);
-  const elHeights = useRef<number[]>(
+  const calcRef = useRef<number | null>(null);
+  const cumulativeHeights = useRef<number[]>(
     Array.from(
       { length: itemCount },
       (_, i) => i * itemSize + (i === itemCount - 1 ? 0 : gap)
@@ -58,26 +65,27 @@ function useVirtualizedList({
     const scrollRefElement = getScrollElementRef.current();
     if (!scrollRefElement) return;
     setScrollElement(scrollRefElement);
+    let rafId: number | null = null;
+
     const handleScroll = () => {
-      rafId.current = window.requestAnimationFrame(() => {
-        const scrollTop = scrollRefElement.scrollTop;
-        const currIndex = estimateIndex(elHeights.current, scrollTop);
-        setStartIndex(currIndex);
+      rafId = window.requestAnimationFrame(() => {
+        setStartIndex(
+          estimateIndex(cumulativeHeights.current, scrollRefElement.scrollTop)
+        );
       });
     };
 
     scrollRefElement.addEventListener("scroll", handleScroll);
     return () => {
-      if (rafId.current) {
-        window.cancelAnimationFrame(rafId.current);
+      if (rafId) {
+        window.cancelAnimationFrame(rafId);
       }
       scrollRefElement.removeEventListener("scroll", handleScroll);
     };
   }, [itemSizeWithGap]);
 
-  // last element does not have *gap*
   const getTotalSize = useCallback(
-    () => elHeights.current[elHeights.current.length - 1],
+    () => cumulativeHeights.current[cumulativeHeights.current.length - 1],
     []
   );
 
@@ -85,42 +93,68 @@ function useVirtualizedList({
     if (!element) return;
     const idxString = element.getAttribute("data-index");
     if (!idxString) return;
-    const idx = Number(idxString);
 
+    const elIdx = Number(idxString);
     // need to handle case when item count increases
-    const height = element.getBoundingClientRect().height;
-    elHeights.current[idx] =
-      idx === 0 ? height : elHeights.current[idx - 1] + height;
+    const savedCumulativeHeight = cumulativeHeights.current[elIdx];
+    const itemHeight = element.getBoundingClientRect().height;
+
+    const updatedCumulativeHeight =
+      elIdx === 0
+        ? itemHeight
+        : cumulativeHeights.current[elIdx - 1] + itemHeight;
+    cumulativeHeights.current[elIdx] = updatedCumulativeHeight;
+
+    // updates cumulative height from index of element to end, not sure if this is the best approach :thinkge:
+    if (updatedCumulativeHeight !== savedCumulativeHeight && elIdx !== 0) {
+      if (calcRef.current) {
+        window.cancelAnimationFrame(calcRef.current);
+      }
+      calcRef.current = window.requestAnimationFrame(() => {
+        for (let i = elIdx + 1; i < cumulativeHeights.current.length; i++) {
+          cumulativeHeights.current[i] =
+            cumulativeHeights.current[i] +
+            (updatedCumulativeHeight - savedCumulativeHeight);
+        }
+      });
+    }
   }, []);
 
   const getVirtualItems = useCallback(() => {
     const windowHeight = scrollElement?.getBoundingClientRect()?.height ?? 0;
     const scrollTop = scrollElement?.scrollTop ?? 0;
-    const nextHeight = windowHeight + scrollTop;
     const paddedStartIndex = Math.max(0, startIndex - overscan);
-    const endIndex = estimateIndex(elHeights.current, nextHeight, startIndex);
+    const endIndex = estimateIndex(
+      cumulativeHeights.current,
+      windowHeight + scrollTop,
+      startIndex
+    );
     const paddedEndIndex = Math.min(
       endIndex + overscan,
       Math.max(itemCount - 1, 0)
     );
 
-    const x = Array.from(
+    const result = Array.from(
       { length: paddedEndIndex - paddedStartIndex + 1 },
-      (_, i) => ({
-        size:
-          elHeights.current[paddedStartIndex + i] -
-          (paddedStartIndex === 0
-            ? 0
-            : elHeights.current[paddedStartIndex - 1]),
-        key: paddedStartIndex + i,
-        index: paddedStartIndex + i,
-        start:
-          paddedStartIndex + i === 0
-            ? 0
-            : elHeights.current[paddedStartIndex - 1 + i],
-      })
+      (_, i) => {
+        const realIdx = paddedStartIndex + i;
+
+        return {
+          size:
+            cumulativeHeights.current[realIdx] -
+            (paddedStartIndex === 0
+              ? 0
+              : cumulativeHeights.current[paddedStartIndex - 1]),
+          key: realIdx,
+          index: realIdx,
+          start:
+            realIdx === 0
+              ? 0
+              : cumulativeHeights.current[paddedStartIndex - 1 + i],
+        };
+      }
     );
-    return x;
+    return result;
   }, [itemCount, overscan, scrollElement, startIndex]);
 
   const memoedValue = useMemo(
